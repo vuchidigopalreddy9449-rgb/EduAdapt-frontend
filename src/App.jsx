@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
@@ -50,6 +50,7 @@ function App() {
         `${API_BASE_URL}/api/auth/${endpoint}`,
         {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             isRegister
@@ -89,6 +90,7 @@ function App() {
   }
 
   function logout() {
+    fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
     setUser(null);
     setPage("login");
     setIsRegister(false);
@@ -713,15 +715,11 @@ function App() {
   );
 }
 
-const starterExams = [
-  { id: 1, title: "JavaScript Fundamentals", course: "Web Development", date: "Oct 24, 2026", questions: 20, status: "Published" },
-  { id: 2, title: "SQL Checkpoint", course: "Database Management", date: "Oct 28, 2026", questions: 12, status: "Draft" },
-];
-
 function TeacherPortal({ user, onLogout }) {
   const [view, setView] = useState("overview");
-  const [exams, setExams] = useState(starterExams);
+  const [exams, setExams] = useState([]);
   const [questions, setQuestions] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [aiTopic, setAiTopic] = useState("");
   const [aiDifficulty, setAiDifficulty] = useState("Intermediate");
@@ -734,11 +732,63 @@ function TeacherPortal({ user, onLogout }) {
   const name = user?.name || user?.email?.split("@")[0] || "Teacher";
   const title = { overview: "Teacher dashboard", questions: "Question bank", exams: "Exams & assessments" }[view];
 
-  function addQuestion(event) {
+  async function apiRequest(path, options = {}) {
+      const response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include", ...options });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Could not save your changes.");
+    return result;
+  }
+
+  useEffect(() => {
+    async function loadTeacherData() {
+      if (!user?.id) {
+        setNotice("Please sign in again to load your saved teacher data.");
+        setDataLoading(false);
+        return;
+      }
+      setDataLoading(true);
+      try {
+        const [savedQuestions, savedExams] = await Promise.all([
+          apiRequest(`/api/teacher/questions?teacherId=${user.id}`),
+          apiRequest(`/api/teacher/exams?teacherId=${user.id}`),
+        ]);
+        setQuestions(savedQuestions);
+        setExams(savedExams);
+      } catch (error) {
+        setNotice(error.message.includes("Failed to fetch") ? "Cannot reach the backend while loading your saved work." : error.message);
+      } finally {
+        setDataLoading(false);
+      }
+    }
+    loadTeacherData();
+  }, [user?.id]);
+
+  async function addQuestion(event) {
     event.preventDefault();
-    setQuestions((items) => [{ id: Date.now(), ...questionForm }, ...items]);
-    setQuestionForm({ ...questionForm, prompt: "", answer: "" });
-    setNotice("Question added to your question bank.");
+    try {
+      const savedQuestion = await apiRequest("/api/teacher/questions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacherId: user.id, ...questionForm }),
+      });
+      setQuestions((items) => [savedQuestion, ...items]);
+      setQuestionForm({ ...questionForm, prompt: "", answer: "" });
+      setNotice("Question saved to your account.");
+    } catch (error) { setNotice(error.message); }
+  }
+
+  async function uploadQuestionFile(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("teacherId", user.id);
+    formData.append("course", questionForm.course);
+    formData.append("file", file);
+    try {
+      const savedFile = await apiRequest("/api/teacher/questions/upload", { method: "POST", body: formData });
+      setQuestions((items) => [savedFile, ...items]);
+      setNotice(`${file.name} uploaded and saved to your account.`);
+    } catch (error) { setNotice(error.message); }
+    finally { event.target.value = ""; }
   }
 
   async function generateAIQuestions(event) {
@@ -749,6 +799,7 @@ function TeacherPortal({ user, onLogout }) {
     try {
       const response = await fetch(`${API_BASE_URL}/api/ai/questions`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: aiTopic, course: questionForm.course, count: Number(aiCount), difficulty: aiDifficulty }),
       });
@@ -762,17 +813,32 @@ function TeacherPortal({ user, onLogout }) {
     }
   }
 
-  function addAIQuestions() {
-    setQuestions((items) => [...aiQuestions.map((question, index) => ({ id: Date.now() + index, ...question, course: questionForm.course, difficulty: aiDifficulty })), ...items]);
-    setNotice(`${aiQuestions.length} AI questions added to your question bank.`);
-    setAiQuestions([]);
+  async function addAIQuestions() {
+    try {
+      const savedQuestions = await apiRequest("/api/teacher/questions/batch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacherId: user.id, course: questionForm.course, difficulty: aiDifficulty, questions: aiQuestions }),
+      });
+      setQuestions((items) => [...savedQuestions, ...items]);
+      setNotice(`${savedQuestions.length} AI questions saved to your account.`);
+      setAiQuestions([]);
+    } catch (error) { setNotice(error.message); }
   }
 
-  function addExam(event) {
+  async function addExam(event) {
     event.preventDefault();
-    setExams((items) => [{ id: Date.now(), title: examForm.title, course: examForm.course, date: examForm.date ? new Date(`${examForm.date}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "Date not set", questions: 0, status: "Draft", file: examForm.file?.name }, ...items]);
-    setExamForm({ title: "", course: "Web Development", date: "", file: null });
-    setNotice("Exam saved as a draft.");
+    const formData = new FormData();
+    formData.append("teacherId", user.id);
+    formData.append("title", examForm.title);
+    formData.append("course", examForm.course);
+    if (examForm.date) formData.append("date", examForm.date);
+    if (examForm.file) formData.append("file", examForm.file);
+    try {
+      const savedExam = await apiRequest("/api/teacher/exams", { method: "POST", body: formData });
+      setExams((items) => [savedExam, ...items]);
+      setExamForm({ title: "", course: "Web Development", date: "", file: null });
+      setNotice("Assessment draft saved to your account.");
+    } catch (error) { setNotice(error.message); }
   }
 
   return (
@@ -791,18 +857,18 @@ function TeacherPortal({ user, onLogout }) {
         {view === "overview" && <>
           <section className="teacher-hero"><div><span className="teacher-eyebrow">YOUR CLASSROOM, ORGANIZED</span><h2>Good to have you here, {name.split(" ")[0]}.</h2><p>Prepare questions, build assessments, and keep your course materials in one place.</p><button className="teacher-primary" onClick={() => setView("exams")}>Create an exam <span>→</span></button></div><div className="teacher-hero-art" aria-hidden="true">✎</div></section>
           <div className="teacher-stats"><article><span className="teacher-stat-icon violet">▤</span><div><p>Exams & assessments</p><strong>{exams.length}</strong><small>In your workspace</small></div></article><article><span className="teacher-stat-icon mint">?</span><div><p>Questions added</p><strong>{questions.length}</strong><small>Ready to use</small></div></article><article><span className="teacher-stat-icon amber">◷</span><div><p>Published exams</p><strong>{exams.filter((exam) => exam.status === "Published").length}</strong><small>Shared with learners</small></div></article></div>
-          <div className="teacher-content-grid"><section className="teacher-panel"><div className="teacher-panel-head"><div><h3>Recent assessments</h3><p>Your latest exam activity</p></div><button className="teacher-text-button" onClick={() => setView("exams")}>View all →</button></div><ExamList exams={exams.slice(0, 3)} /></section><section className="teacher-panel teacher-quick-panel"><div className="teacher-panel-head"><div><h3>Quick actions</h3><p>Get your next class ready</p></div></div><button onClick={() => setView("questions")}><span className="quick-icon violet">?</span><span><strong>Add questions</strong><small>Write questions or upload a file</small></span><b>→</b></button><button onClick={() => setView("exams")}><span className="quick-icon mint">▤</span><span><strong>Create an exam</strong><small>Set a date and attach materials</small></span><b>→</b></button></section></div>
+          <div className="teacher-content-grid"><section className="teacher-panel"><div className="teacher-panel-head"><div><h3>Recent assessments</h3><p>Your latest exam activity</p></div><button className="teacher-text-button" onClick={() => setView("exams")}>View all →</button></div><ExamList exams={exams.slice(0, 3)} teacherId={user.id} /></section><section className="teacher-panel teacher-quick-panel"><div className="teacher-panel-head"><div><h3>Quick actions</h3><p>Get your next class ready</p></div></div><button onClick={() => setView("questions")}><span className="quick-icon violet">?</span><span><strong>Add questions</strong><small>Write questions or upload a file</small></span><b>→</b></button><button onClick={() => setView("exams")}><span className="quick-icon mint">▤</span><span><strong>Create an exam</strong><small>Set a date and attach materials</small></span><b>→</b></button></section></div>
         </>}
-        {view === "questions" && <><section className="teacher-page-intro"><div><h2>Build your question bank</h2><p>Add questions one at a time or import a file to reuse in assessments.</p></div><span className="teacher-counter">{questions.length} added</span></section><div className="teacher-content-grid question-layout"><form className="teacher-panel teacher-form" onSubmit={addQuestion}><div className="teacher-panel-head"><div><h3>Write a question</h3><p>Add a question and its correct answer.</p></div><span className="form-step">01</span></div><label>Course<select value={questionForm.course} onChange={(e) => setQuestionForm({ ...questionForm, course: e.target.value })}><option>Web Development</option><option>Java Programming</option><option>Database Management</option><option>Machine Learning</option></select></label><label>Question<textarea value={questionForm.prompt} onChange={(e) => setQuestionForm({ ...questionForm, prompt: e.target.value })} placeholder="e.g. What does the CSS flex property control?" required rows="4" /></label><div className="teacher-form-row"><label>Correct answer<input value={questionForm.answer} onChange={(e) => setQuestionForm({ ...questionForm, answer: e.target.value })} placeholder="Enter the answer" required /></label><label>Difficulty<select value={questionForm.difficulty} onChange={(e) => setQuestionForm({ ...questionForm, difficulty: e.target.value })}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label></div><button type="submit" className="teacher-primary">Add to question bank <span>→</span></button></form><section className="teacher-panel import-panel"><div className="teacher-panel-head"><div><h3>Import questions</h3><p>Upload your existing question file.</p></div><span className="form-step">02</span></div><label className="upload-zone"><input type="file" accept=".csv,.xlsx,.doc,.docx,.pdf,.txt" onChange={(e) => { if (e.target.files?.[0]) { setQuestions((items) => [{ id: Date.now(), prompt: e.target.files[0].name, course: "Imported file", answer: "File upload", difficulty: "—" }, ...items]); setNotice(`${e.target.files[0].name} added to your question bank.`); e.target.value = ""; } }} /><span className="upload-icon">↑</span><strong>Choose a file to upload</strong><small>CSV, Excel, Word, PDF, or TXT · up to 20 MB</small><span className="upload-choose">Browse files</span></label><p className="upload-footnote"><span>ⓘ</span> Your file is added to this workspace for organizing questions.</p></section></div><section className="teacher-panel teacher-ai-panel"><div className="teacher-panel-head"><div><h3>Generate with AI</h3><p>Create a draft set from a topic, then review before adding.</p></div><span className="form-step">AI</span></div><form className="teacher-ai-form" onSubmit={generateAIQuestions}><label>Topic or lesson<input value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="e.g. CSS flexbox and responsive layouts" maxLength="400" required /></label><div className="teacher-form-row"><label>Difficulty<select value={aiDifficulty} onChange={(event) => setAiDifficulty(event.target.value)}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label><label>Number of questions<select value={aiCount} onChange={(event) => setAiCount(event.target.value)}>{[3, 5, 8, 10].map((count) => <option key={count} value={count}>{count}</option>)}</select></label></div><button className="teacher-primary" type="submit" disabled={aiLoading}>{aiLoading ? "Generating…" : "Generate questions"} <span>✦</span></button></form>{aiError && <p className="teacher-ai-error" role="alert">{aiError}</p>}{aiQuestions.length > 0 && <><div className="teacher-ai-results">{aiQuestions.map((question, index) => <article key={`${index}-${question.prompt}`}><strong>{index + 1}. {question.prompt}</strong><small>Answer: {question.answer}</small></article>)}</div><button className="teacher-text-button" onClick={addAIQuestions}>Add these {aiQuestions.length} questions to my bank →</button></>}</section><section className="teacher-panel teacher-question-list"><div className="teacher-panel-head"><div><h3>Recently added</h3><p>Your questions and imported materials</p></div></div>{questions.length ? <div className="question-list">{questions.map((q) => <article key={q.id}><span className="question-mark">?</span><div><strong>{q.prompt}</strong><small>{q.course} · {q.difficulty}</small></div><span className="question-answer">{q.answer}</span></article>)}</div> : <div className="teacher-empty"><span>?</span><strong>Your question bank is ready</strong><p>Questions you add or import will appear here.</p></div>}</section></>}
-        {view === "exams" && <><section className="teacher-page-intro"><div><h2>Exams & assessments</h2><p>Create an assessment, set the schedule, and attach your exam file.</p></div><span className="teacher-counter">{exams.length} assessments</span></section><div className="teacher-content-grid question-layout"><form className="teacher-panel teacher-form" onSubmit={addExam}><div className="teacher-panel-head"><div><h3>Create an assessment</h3><p>Start a draft for one of your courses.</p></div><span className="form-step">✦</span></div><label>Assessment name<input value={examForm.title} onChange={(e) => setExamForm({ ...examForm, title: e.target.value })} placeholder="e.g. Mid-term assessment" required /></label><label>Course<select value={examForm.course} onChange={(e) => setExamForm({ ...examForm, course: e.target.value })}><option>Web Development</option><option>Java Programming</option><option>Database Management</option><option>Machine Learning</option></select></label><label>Scheduled date<input type="date" value={examForm.date} onChange={(e) => setExamForm({ ...examForm, date: e.target.value })} /></label><label className="exam-file-field">Attach exam file <span className="optional">Optional · PDF, Word, or Excel</span><input type="file" accept=".pdf,.doc,.docx,.xlsx,.csv" onChange={(e) => setExamForm({ ...examForm, file: e.target.files?.[0] || null })} /></label>{examForm.file && <div className="selected-file">▧ <span>{examForm.file.name}</span><button type="button" onClick={() => setExamForm({ ...examForm, file: null })} aria-label="Remove attached file">×</button></div>}<button className="teacher-primary" type="submit">Save as draft <span>→</span></button></form><section className="teacher-panel exam-guide"><span className="guide-icon">✦</span><h3>Assessment checklist</h3><p>Give learners a clear, organized exam experience.</p><ul><li><span>✓</span> Choose the course</li><li><span>✓</span> Give the assessment a clear name</li><li><span>✓</span> Add the exam date</li><li><span>✓</span> Attach an exam file or add questions</li></ul><button className="teacher-text-button" onClick={() => setView("questions")}>Open question bank →</button></section></div><section className="teacher-panel teacher-question-list"><div className="teacher-panel-head"><div><h3>All assessments</h3><p>Exams and drafts in your workspace</p></div></div><ExamList exams={exams} /></section></>}
+        {view === "questions" && <><section className="teacher-page-intro"><div><h2>Build your question bank</h2><p>Add questions one at a time or import a file to reuse in assessments.</p></div><span className="teacher-counter">{questions.length} added</span></section><div className="teacher-content-grid question-layout"><form className="teacher-panel teacher-form" onSubmit={addQuestion}><div className="teacher-panel-head"><div><h3>Write a question</h3><p>Add a question and its correct answer.</p></div><span className="form-step">01</span></div><label>Course<select value={questionForm.course} onChange={(e) => setQuestionForm({ ...questionForm, course: e.target.value })}><option>Web Development</option><option>Java Programming</option><option>Database Management</option><option>Machine Learning</option></select></label><label>Question<textarea value={questionForm.prompt} onChange={(e) => setQuestionForm({ ...questionForm, prompt: e.target.value })} placeholder="e.g. What does the CSS flex property control?" required rows="4" /></label><div className="teacher-form-row"><label>Correct answer<input value={questionForm.answer} onChange={(e) => setQuestionForm({ ...questionForm, answer: e.target.value })} placeholder="Enter the answer" required /></label><label>Difficulty<select value={questionForm.difficulty} onChange={(e) => setQuestionForm({ ...questionForm, difficulty: e.target.value })}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label></div><button type="submit" className="teacher-primary">Add to question bank <span>→</span></button></form><section className="teacher-panel import-panel"><div className="teacher-panel-head"><div><h3>Import questions</h3><p>Upload your existing question file.</p></div><span className="form-step">02</span></div><label className="upload-zone"><input type="file" accept=".csv,.xlsx,.doc,.docx,.pdf,.txt" onChange={uploadQuestionFile} /><span className="upload-icon">↑</span><strong>Choose a file to upload</strong><small>CSV, Excel, Word, PDF, or TXT · up to 10 MB</small><span className="upload-choose">Browse files</span></label><p className="upload-footnote"><span>ⓘ</span> Files are saved for download; their contents are not parsed into individual questions.</p></section></div><section className="teacher-panel teacher-ai-panel"><div className="teacher-panel-head"><div><h3>Generate with AI</h3><p>Create a draft set from a topic, then review before adding.</p></div><span className="form-step">AI</span></div><form className="teacher-ai-form" onSubmit={generateAIQuestions}><label>Topic or lesson<input value={aiTopic} onChange={(event) => setAiTopic(event.target.value)} placeholder="e.g. CSS flexbox and responsive layouts" maxLength="400" required /></label><div className="teacher-form-row"><label>Difficulty<select value={aiDifficulty} onChange={(event) => setAiDifficulty(event.target.value)}><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select></label><label>Number of questions<select value={aiCount} onChange={(event) => setAiCount(event.target.value)}>{[3, 5, 8, 10].map((count) => <option key={count} value={count}>{count}</option>)}</select></label></div><button className="teacher-primary" type="submit" disabled={aiLoading}>{aiLoading ? "Generating…" : "Generate questions"} <span>✦</span></button></form>{aiError && <p className="teacher-ai-error" role="alert">{aiError}</p>}{aiQuestions.length > 0 && <><div className="teacher-ai-results">{aiQuestions.map((question, index) => <article key={`${index}-${question.prompt}`}><strong>{index + 1}. {question.prompt}</strong><small>Answer: {question.answer}</small></article>)}</div><button className="teacher-text-button" onClick={addAIQuestions}>Add these {aiQuestions.length} questions to my bank →</button></>}</section><section className="teacher-panel teacher-question-list"><div className="teacher-panel-head"><div><h3>Recently added</h3><p>Your saved questions and uploaded files</p></div></div>{dataLoading ? <p className="teacher-empty">Loading saved questions…</p> : questions.length ? <div className="question-list">{questions.map((q) => <article key={q.id}><span className="question-mark">?</span><div><strong>{q.prompt}</strong><small>{q.course} · {q.difficulty}</small></div>{q.attachmentName ? <a className="teacher-file-link" href={`${API_BASE_URL}/api/teacher/questions/${q.id}/file?teacherId=${user.id}`}>Download file</a> : <span className="question-answer">{q.answer}</span>}</article>)}</div> : <div className="teacher-empty"><span>?</span><strong>Your question bank is ready</strong><p>Questions you add or import will appear here.</p></div>}</section></>}
+        {view === "exams" && <><section className="teacher-page-intro"><div><h2>Exams & assessments</h2><p>Create an assessment, set the schedule, and attach your exam file.</p></div><span className="teacher-counter">{exams.length} assessments</span></section><div className="teacher-content-grid question-layout"><form className="teacher-panel teacher-form" onSubmit={addExam}><div className="teacher-panel-head"><div><h3>Create an assessment</h3><p>Start a draft for one of your courses.</p></div><span className="form-step">✦</span></div><label>Assessment name<input value={examForm.title} onChange={(e) => setExamForm({ ...examForm, title: e.target.value })} placeholder="e.g. Mid-term assessment" required /></label><label>Course<select value={examForm.course} onChange={(e) => setExamForm({ ...examForm, course: e.target.value })}><option>Web Development</option><option>Java Programming</option><option>Database Management</option><option>Machine Learning</option></select></label><label>Scheduled date<input type="date" value={examForm.date} onChange={(e) => setExamForm({ ...examForm, date: e.target.value })} /></label><label className="exam-file-field">Attach exam file <span className="optional">Optional · up to 10 MB</span><input type="file" accept=".pdf,.doc,.docx,.xlsx,.csv" onChange={(e) => setExamForm({ ...examForm, file: e.target.files?.[0] || null })} /></label>{examForm.file && <div className="selected-file">▧ <span>{examForm.file.name}</span><button type="button" onClick={() => setExamForm({ ...examForm, file: null })} aria-label="Remove attached file">×</button></div>}<button className="teacher-primary" type="submit">Save as draft <span>→</span></button></form><section className="teacher-panel exam-guide"><span className="guide-icon">✦</span><h3>Assessment checklist</h3><p>Give learners a clear, organized exam experience.</p><ul><li><span>✓</span> Choose the course</li><li><span>✓</span> Give the assessment a clear name</li><li><span>✓</span> Add the exam date</li><li><span>✓</span> Attach an exam file or add questions</li></ul><button className="teacher-text-button" onClick={() => setView("questions")}>Open question bank →</button></section></div><section className="teacher-panel teacher-question-list"><div className="teacher-panel-head"><div><h3>All assessments</h3><p>Saved exams and drafts</p></div></div>{dataLoading ? <p className="teacher-empty">Loading saved assessments…</p> : <ExamList exams={exams} teacherId={user.id} />}</section></>}
         <footer className="teacher-footer"><span>EduAdapt for Educators</span><span>Teaching tools, all in one place.</span></footer>
       </main>
     </div>
   );
 }
 
-function ExamList({ exams }) {
-  return exams.length ? <div className="exam-list">{exams.map((exam) => <article key={exam.id}><span className="exam-file-icon">▤</span><div className="exam-details"><strong>{exam.title}</strong><small>{exam.course} · {exam.questions ? `${exam.questions} questions` : exam.file || "No file attached"}</small></div><span className="exam-date">{exam.date}</span><span className={`exam-status ${exam.status === "Published" ? "published" : "draft"}`}><i />{exam.status}</span></article>)}</div> : <div className="teacher-empty"><span>▤</span><strong>No assessments yet</strong><p>Create an assessment to get started.</p></div>;
+function ExamList({ exams, teacherId }) {
+  return exams.length ? <div className="exam-list">{exams.map((exam) => <article key={exam.id}><span className="exam-file-icon">▤</span><div className="exam-details"><strong>{exam.title}</strong><small>{exam.course} · {exam.questions ? `${exam.questions} questions` : exam.file || "No file attached"}</small>{exam.file && <a className="teacher-file-link" href={`${API_BASE_URL}/api/teacher/exams/${exam.id}/file?teacherId=${teacherId}`}>Download attached file</a>}</div><span className="exam-date">{exam.date || "Date not set"}</span><span className={`exam-status ${exam.status === "Published" ? "published" : "draft"}`}><i />{exam.status}</span></article>)}</div> : <div className="teacher-empty"><span>▤</span><strong>No assessments yet</strong><p>Create an assessment to get started.</p></div>;
 }
 
 function Stat({ icon, label, value }) {

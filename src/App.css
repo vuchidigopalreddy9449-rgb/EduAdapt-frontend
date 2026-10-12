@@ -95,6 +95,7 @@
 .teacher-ai-results article { display: flex; flex-direction: column; gap: 6px; padding: 12px 13px; border: 1px solid #ededeb; border-radius: 8px; background: #fafaf9; }
 .teacher-ai-results strong { color: #292929; font-size: 12px; line-height: 1.5; }
 .teacher-ai-results small { color: #6f6f6f; font-size: 11px; line-height: 1.5; }
+.teacher-file-link { display: inline-block; margin-top: 5px; color: #444; font-size: 10px; font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
 
 /* Minimal styling across the full EduAdapt app */
 :root { --primary: #333; --primary-dark: #222; --primary-light: #f3f3f2; --border: #e9e9e7; --background: #fff; --surface: #fff; --success: #555; }
