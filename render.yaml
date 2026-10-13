@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: edadapt-backend
+    runtime: docker
+    repo: https://github.com/vuchidigopalreddy9449-rgb/EduAdapt-backend.git
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: free
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: MYSQLHOST
+        sync: false
+      - key: MYSQLPORT
+        sync: false
+      - key: MYSQLDATABASE
+        sync: false
+      - key: MYSQLUSER
+        sync: false
+      - key: MYSQLPASSWORD
+        sync: false
+      - key: MYSQL_SSL_MODE
+        value: REQUIRED
+      - key: FRONTEND_URL
+        value: https://edadapt-frontend.onrender.com
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+
+  - type: web
+    name: edadapt-frontend
+    runtime: docker
+    repo: https://github.com/vuchidigopalreddy9449-rgb/EduAdapt-frontend.git
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: singapore
+    plan: free
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: edadapt-backend
+          envVarKey: RENDER_EXTERNAL_URL
