@@ -11,18 +11,26 @@ services:
     envVars:
       - key: PORT
         value: "10000"
-      - key: MYSQLHOST
-        sync: false
-      - key: MYSQLPORT
-        sync: false
-      - key: MYSQLDATABASE
-        sync: false
-      - key: MYSQLUSER
-        sync: false
-      - key: MYSQLPASSWORD
-        sync: false
-      - key: MYSQL_SSL_MODE
-        value: REQUIRED
+      - key: PGHOST
+        fromDatabase:
+          name: edadapt-db
+          property: host
+      - key: PGPORT
+        fromDatabase:
+          name: edadapt-db
+          property: port
+      - key: PGDATABASE
+        fromDatabase:
+          name: edadapt-db
+          property: database
+      - key: PGUSER
+        fromDatabase:
+          name: edadapt-db
+          property: user
+      - key: PGPASSWORD
+        fromDatabase:
+          name: edadapt-db
+          property: password
       - key: FRONTEND_URL
         value: https://edadapt-frontend.onrender.com
       - key: OPENAI_MODEL
